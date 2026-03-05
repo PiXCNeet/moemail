@@ -5,12 +5,13 @@ import { useTranslations } from "next-intl"
 import { Send, Inbox } from "lucide-react"
 import { Tabs, SlidingTabsList, SlidingTabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { MessageList } from "./message-list"
-import { useSendPermission } from "@/hooks/use-send-permission"
+// ❌ 删除：import { useSendPermission } from "@/hooks/use-send-permission"
 
 interface MessageListContainerProps {
   email: {
     id: string
     address: string
+    token?: string // ✅ 新增：必须传入 token
   }
   onMessageSelect: (messageId: string | null, messageType?: 'received' | 'sent') => void
   selectedMessageId?: string | null
@@ -20,7 +21,10 @@ interface MessageListContainerProps {
 export function MessageListContainer({ email, onMessageSelect, selectedMessageId, refreshTrigger }: MessageListContainerProps) {
   const t = useTranslations("emails.messages")
   const [activeTab, setActiveTab] = useState<'received' | 'sent'>('received')
-  const { canSend: canSendEmails } = useSendPermission()
+
+  // 🛠️ 静态版适配：Mail.tm 的发送功能需要 SMTP 权限，通常免费版只用作接收
+  // 如果你不需要发送功能，直接设为 false。
+  const canSendEmails = false 
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId as 'received' | 'sent')
@@ -64,15 +68,17 @@ export function MessageListContainer({ email, onMessageSelect, selectedMessageId
           </TabsContent>
         </Tabs>
       ) : (
+        /* ✅ 大部分情况下只显示收件箱 */
         <div className="flex-1 overflow-hidden">
           <MessageList
             email={email}
             messageType="received"
             onMessageSelect={onMessageSelect}
             selectedMessageId={selectedMessageId}
+            refreshTrigger={refreshTrigger} // 别忘了透传刷新触发器
           />
         </div>
       )}
     </div>
   )
-} 
+}
