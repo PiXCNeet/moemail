@@ -1,15 +1,11 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useSession } from "next-auth/react"
 import { useTranslations } from "next-intl"
-import { CreateDialog } from "./create-dialog"
-import { ShareDialog } from "./share-dialog"
+// 移除 Next-Auth 和 UserRole 引用
 import { Mail, RefreshCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { useThrottle } from "@/hooks/use-throttle"
-import { EMAIL_CONFIG } from "@/config"
 import { useToast } from "@/components/ui/use-toast"
 import {
   AlertDialog,
@@ -21,15 +17,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ROLES } from "@/lib/permissions"
-import { useUserRole } from "@/hooks/use-user-role"
-import { useConfig } from "@/hooks/use-config"
 
 interface Email {
   id: string
   address: string
-  createdAt: number
-  expiresAt: number
+  createdAt?: number
+  expiresAt?: number
 }
 
 interface EmailListProps {
@@ -37,64 +30,43 @@ interface EmailListProps {
   selectedEmailId?: string
 }
 
-interface EmailResponse {
-  emails: Email[]
-  nextCursor: string | null
-  total: number
-}
-
 export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
-  const { data: session } = useSession()
-  const { config } = useConfig()
-  const { role } = useUserRole()
   const t = useTranslations("emails.list")
   const tCommon = useTranslations("common.actions")
   const [emails, setEmails] = useState<Email[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [total, setTotal] = useState(0)
   const [emailToDelete, setEmailToDelete] = useState<Email | null>(null)
   const { toast } = useToast()
 
-  const fetchEmails = async (cursor?: string) => {
+  // 补全：从 localStorage 加载当前活跃邮箱
+  const fetchEmails = async () => {
+    setLoading(true)
     try {
-      const url = new URL("/api/emails", window.location.origin)
-      if (cursor) {
-        url.searchParams.set('cursor', cursor)
-      }
-      const response = await fetch(url)
-      const data = await response.json() as EmailResponse
-      
-      if (!cursor) {
-        const newEmails = data.emails
-        const oldEmails = emails
+      const token = localStorage.getItem('mailtm_token')
+      const address = localStorage.getItem('mailtm_address')
+      const id = localStorage.getItem('mailtm_account_id')
 
-        const lastDuplicateIndex = newEmails.findIndex(
-          newEmail => oldEmails.some(oldEmail => oldEmail.id === newEmail.id)
-        )
-
-        if (lastDuplicateIndex === -1) {
-          setEmails(newEmails)
-          setNextCursor(data.nextCursor)
-          setTotal(data.total)
-          return
+      if (token && address && id) {
+        const currentEmail: Email = {
+          id,
+          address,
+          expiresAt: Date.now() + 3600000 // 模拟过期时间
         }
-        const uniqueNewEmails = newEmails.slice(0, lastDuplicateIndex)
-        setEmails([...uniqueNewEmails, ...oldEmails])
-        setTotal(data.total)
-        return
+        setEmails([currentEmail])
+        
+        // 自动选中当前邮箱
+        if (!selectedEmailId) {
+          onEmailSelect(currentEmail)
+        }
+      } else {
+        setEmails([])
       }
-      setEmails(prev => [...prev, ...data.emails])
-      setNextCursor(data.nextCursor)
-      setTotal(data.total)
     } catch (error) {
-      console.error("Failed to fetch emails:", error)
+      console.error("Failed to load local email:", error)
     } finally {
       setLoading(false)
       setRefreshing(false)
-      setLoadingMore(false)
     }
   }
 
@@ -103,50 +75,25 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
     await fetchEmails()
   }
 
-  const handleScroll = useThrottle((e: React.UIEvent<HTMLDivElement>) => {
-    if (loadingMore) return
-
-    const { scrollHeight, scrollTop, clientHeight } = e.currentTarget
-    const threshold = clientHeight * 1.5
-    const remainingScroll = scrollHeight - scrollTop
-
-    if (remainingScroll <= threshold && nextCursor) {
-      setLoadingMore(true)
-      fetchEmails(nextCursor)
-    }
-  }, 200)
-
+  // 关键：移除对 session 的依赖，改为组件加载时运行
   useEffect(() => {
-    if (session) fetchEmails()
-  }, [session])
+    fetchEmails()
+  }, [])
 
   const handleDelete = async (email: Email) => {
     try {
-      const response = await fetch(`/api/emails/${email.id}`, {
-        method: "DELETE"
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        toast({
-          title: t("error"),
-          description: (data as { error: string }).error,
-          variant: "destructive"
-        })
-        return
-      }
-
-      setEmails(prev => prev.filter(e => e.id !== email.id))
-      setTotal(prev => prev - 1)
+      // 静态版删除逻辑：直接清空本地存储
+      localStorage.removeItem('mailtm_token')
+      localStorage.removeItem('mailtm_address')
+      localStorage.removeItem('mailtm_account_id')
+      
+      setEmails([])
+      onEmailSelect(null)
 
       toast({
         title: t("success"),
         description: t("deleteSuccess")
       })
-      
-      if (selectedEmailId === email.id) {
-        onEmailSelect(null)
-      }
     } catch {
       toast({
         title: t("error"),
@@ -157,8 +104,6 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
       setEmailToDelete(null)
     }
   }
-
-  if (!session) return null
 
   return (
     <>
@@ -175,19 +120,15 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
               <RefreshCw className="h-4 w-4" />
             </Button>
             <span className="text-xs text-gray-500">
-              {role === ROLES.EMPEROR ? (
-                t("emailCountUnlimited", { count: total })
-              ) : (
-                t("emailCount", { count: total, max: config?.maxEmails || EMAIL_CONFIG.MAX_ACTIVE_EMAILS })
-              )}
+              {t("emailCount", { count: emails.length, max: 1 })}
             </span>
           </div>
-          <CreateDialog onEmailCreated={handleRefresh} />
+          {/* 这里可以放 CreateDialog，但它也需要修改成调用 mailtm.quickCreate */}
         </div>
         
-        <div className="flex-1 overflow-auto p-2" onScroll={handleScroll}>
+        <div className="flex-1 overflow-auto p-2">
           {loading ? (
-            <div className="text-center text-sm text-gray-500">{t("loading")}</div>
+            <div className="text-center text-sm text-gray-500 py-4">{t("loading")}</div>
           ) : emails.length > 0 ? (
             <div className="space-y-1">
               {emails.map(email => (
@@ -203,15 +144,10 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
                   <div className="truncate flex-1">
                     <div className="font-medium truncate">{email.address}</div>
                     <div className="text-xs text-gray-500">
-                      {new Date(email.expiresAt).getFullYear() === 9999 ? (
-                        t("permanent")
-                      ) : (
-                        `${t("expiresAt")}: ${new Date(email.expiresAt).toLocaleString()}`
-                      )}
+                      {t("permanent")}
                     </div>
                   </div>
                   <div className="opacity-0 group-hover:opacity-100 flex gap-1" onClick={(e) => e.stopPropagation()}>
-                    <ShareDialog emailId={email.id} emailAddress={email.address} />
                     <Button
                       variant="ghost"
                       size="icon"
@@ -226,14 +162,9 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
                   </div>
                 </div>
               ))}
-              {loadingMore && (
-                <div className="text-center text-sm text-gray-500 py-2">
-                  {t("loadingMore")}
-                </div>
-              )}
             </div>
           ) : (
-            <div className="text-center text-sm text-gray-500">
+            <div className="text-center text-sm text-gray-500 py-10">
               {t("noEmails")}
             </div>
           )}
@@ -261,4 +192,4 @@ export function EmailList({ onEmailSelect, selectedEmailId }: EmailListProps) {
       </AlertDialog>
     </>
   )
-} 
+}
